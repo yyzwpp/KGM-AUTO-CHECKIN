@@ -332,8 +332,8 @@ async function consturctServer(moduleDefs) {
     // 获取 env guid
     const env_guid = isUUIDv4(process.env.KUGOU_API_GUID) ? cryptoMd5(process.env.KUGOU_API_GUID) : process.env.KUGOU_API_GUID;
 
-    // 计算设备 MID（基于 GUID 的衍生标识）
-    const mid = calculateMid(env_guid ?? guid);
+    // 计算设备 MID（基于 GUID 的衍生标识）；KUGOU_API_MID 环境变量可显式覆盖（与上游一致，建议固定纯数字设备 ID）
+    const mid = process.env.KUGOU_API_MID ?? calculateMid(env_guid ?? guid);
 
     // 依次注入各平台标识 Cookie
     ensureCookie('KUGOU_API_PLATFORM', process.env.platform);
@@ -379,6 +379,15 @@ async function consturctServer(moduleDefs) {
    * 访问 /docs 可查看项目接口文档
    */
   app.use('/docs', express.static(path.join(__dirname, 'docs')));
+
+  /**
+   * 健康检查端点。
+   * 供 utils/waitForApi 探活使用：轻量、不触发任何上游请求、不参与缓存。
+   * 语义明确（服务已就绪），避免原先"任意路径返回任意状态码即视为就绪"的模糊判定。
+   */
+  app.get('/healthz', (req, res) => {
+    res.status(200).json({ ok: true, uptime: Math.floor(process.uptime()) });
+  });
 
   /**
    * ============================================================
@@ -431,13 +440,8 @@ async function consturctServer(moduleDefs) {
       //   - cookie: 合并请求 Cookie 和 query 中传入的 cookie 参数
       //   - params: query 中除 cookie 外的其余参数
       //   - body: 请求体（POST 数据）
-      // 将 query.cookie 规整为对象后再合并：字符串走 cookieToJson，对象原样，其余视为空；
-      // 同时用新对象合并，避免直接 mutate req.cookies 以及字符串/数组直接 Object.assign 导致的键污染
-      const cookieSource = typeof cookie === 'string'
-        ? cookieToJson(cookie)
-        : (cookie && !Array.isArray(cookie) && typeof cookie === 'object' ? cookie : {});
       const body = Buffer.isBuffer(req.body) ? { data: req.body } : req.body;
-      const query = Object.assign({}, { cookie: Object.assign({}, req.cookies, cookieSource) }, params, body);
+      const query = Object.assign({}, { cookie: Object.assign({}, req.cookies, cookie) }, params, body);
 
       // Step 4: 如果请求携带了 Authorization 头，将其解析为 Cookie 并合并
       // 这样客户端可以通过 Authorization 头传递认证信息，例如: token=xxx;userid=xxx
@@ -469,7 +473,7 @@ async function consturctServer(moduleDefs) {
           return createRequest(config);
         });
 
-        // 请求成功日志
+        // 请求成功日志（URL 经脱敏：token/手机号/userid 等不会写入日志）
         console.log('[OK]', sanitizeUrlForLog(req.originalUrl));
 
         // Step 6: 处理模块返回的 Cookie
@@ -503,7 +507,7 @@ async function consturctServer(moduleDefs) {
         // 异常处理：模块内部错误会被封装为包含 status 和 body 的错误对象抛出
         const moduleResponse = e;
 
-        // 错误日志
+        // 错误日志（URL 与响应体均经脱敏）
         console.log('[ERR]', sanitizeUrlForLog(req.originalUrl), {
           status: moduleResponse.status,
           body: sanitizeBodyForLog(moduleResponse.body),

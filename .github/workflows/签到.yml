@@ -1,8 +1,11 @@
 name: 签到
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '10 17 * * *'
+    # GitHub Actions 的 schedule 只支持 UTC，不支持 timezone 字段。
+    # UTC 17:10 = 北京时间 01:10（次日）
+    - cron: "10 17 * * *"
+  workflow_dispatch:
+
 permissions:
   contents: read
   actions: write

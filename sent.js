@@ -32,4 +32,4 @@ async function login() {
   }
 }
 
-login().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1) })
+login().then(() => { process.exitCode = 0 }).catch(e => { console.error(e); process.exitCode = 1 })

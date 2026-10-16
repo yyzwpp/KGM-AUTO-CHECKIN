@@ -1,9 +1,10 @@
 import { createRequire } from 'module'
 import fs from 'node:fs'
+import path from 'node:path'
 import { close_api, delay, send, startService, waitForApi } from "./utils/utils.js";
 import { printGreen, printMagenta, printRed, printYellow } from "./utils/colorOut.js";
 import { summarizeResponse } from "./utils/safeLog.js";
-import { upsertUser, saveUserinfo } from "./utils/userinfo.js";
+import { upsertUser, saveUserinfo, parseUserinfoJson } from "./utils/userinfo.js";
 
 const require = createRequire(import.meta.url)
 // 优先从常规 node_modules 解析（本地/全局安装场景），失败再回退到 Actions 构建产物中的 api/node_modules 硬编码路径
@@ -16,8 +17,9 @@ try {
 
 // GitHub Actions 运行环境下自动注入的 Step Summary 文件路径
 const SUMMARY_FILE = process.env.GITHUB_STEP_SUMMARY || ''
-const QR_DIR = './qr'
-const KEYS_FILE = './qrkeys.json'
+// Docker 部署时通过 QR_DIR / QR_KEYS_FILE 将二维码输出重定向到挂载卷（如 /app/data/qr）
+const QR_DIR = process.env.QR_DIR || './qr'
+const KEYS_FILE = process.env.QR_KEYS_FILE || './qrkeys.json'
 
 /**
  * 向 GitHub Step Summary 追加 Markdown 内容。
@@ -58,10 +60,14 @@ async function buildQr(url, index, total) {
   // ── 2) base64 data URI（HTML <img> 共用）──
   const dataUrl = await QRCode.toDataURL(url, { width: 320, margin: 2 })
 
-  // ── 3) 日志输出：指引去直链步骤 ──
+  // ── 3) 日志输出：指引扫码途径 ──
   printMagenta(`\n═══ 第 ${index}/${total} 个二维码已生成 ═══`)
   console.log('')
-  console.log('  🔗 请查看下一步「发布二维码图片直链」输出的链接，浏览器打开即可直接扫码')
+  if (SUMMARY_FILE) {
+    console.log('  🔗 请查看下一步「发布二维码图片直链」输出的链接，浏览器打开即可直接扫码')
+  } else {
+    console.log(`  📄 已保存：${path.resolve(QR_DIR)}/qr-${index}.png`)
+  }
   console.log('')
 
   return { dataUrl, url, header, index }
@@ -196,7 +202,13 @@ async function genMode() {
 
     fs.writeFileSync(KEYS_FILE, JSON.stringify({ number, keys }))
     printMagenta(`\n✅ 已生成 ${number} 个二维码。`)
-    printMagenta(`🔗 请查看下一步「发布二维码图片直链」输出的可点击链接，浏览器打开即可直接扫码！`)
+    if (SUMMARY_FILE) {
+      printMagenta(`🔗 请查看下一步「发布二维码图片直链」输出的可点击链接，浏览器打开即可直接扫码！`)
+    } else {
+      // Docker / 本地运行：直接给出二维码文件位置
+      printMagenta(`📁 二维码目录：${path.resolve(QR_DIR)}`)
+      printMagenta(`🌐 请用浏览器打开 login.html 查看二维码并扫码（有效期约 2 分钟）`)
+    }
 
     // 写入 Summary 提示
     appendSummary(`## 🎵 酷狗音乐扫码登录\n\n✅ 已生成 ${number} 个二维码，请查看下一步「发布二维码图片直链」输出的链接进行扫码。\n\n⏳ 二维码有效期约 2 分钟，请尽快扫描。`)
@@ -230,7 +242,7 @@ async function waitMode() {
   const { number, keys } = parsed
   const USERINFO = process.env.USERINFO
   const APPEND_USER = process.env.APPEND_USER
-  const userinfo = (USERINFO && APPEND_USER == "是") ? JSON.parse(USERINFO) : []
+  const userinfo = (USERINFO && APPEND_USER == "是") ? (parseUserinfoJson(USERINFO) || []) : []
 
   const results = []
 
@@ -294,7 +306,7 @@ async function waitMode() {
 
 const mode = process.argv[2] || 'gen'
 if (mode === 'wait') {
-  waitMode().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1) })
+  waitMode().then(() => { process.exitCode = 0 }).catch(e => { console.error(e); process.exitCode = 1 })
 } else {
-  genMode().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1) })
+  genMode().then(() => { process.exitCode = 0 }).catch(e => { console.error(e); process.exitCode = 1 })
 }
